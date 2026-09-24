@@ -1553,14 +1553,10 @@
 (function() {
   'use strict';
 
-  // ============================================================
-  // CLOUD CONFIG — JSONBin.io
-  // ============================================================
   const CLOUD_CONFIG = {
     BIN_ID: '6b4b4fc5affd5d1605329fbc1',
     MASTER_KEY: '$2a$10$cLO0wWsxh9xswUHas6CkqOboiQTZpZOAaDYJ.WNrwObtG8M6h55r2',
-    GET_URL: 'https://api.jsonbin.io/v3/b/6b4b4fc5affd5d1605329fbc1/latest',
-    PUT_URL: 'https://api.jsonbin.io/v3/b/6b4b4fc5affd5d1605329fbc1'
+    BASE_URL: 'https://api.jsonbin.io/v3/b'
   };
 
   const ADMIN_USER = 'ovie65';
@@ -1574,13 +1570,7 @@
     { id: 'btc',     name: 'Bitcoin',       icon: '₿',  desc: 'Pay with Bitcoin',     placeholder: 'Your Bitcoin wallet address', iconClass: 'btc' }
   ];
 
-  const DEFAULT_ENABLED = {
-    paypal: true,
-    venmo: true,
-    cashapp: true,
-    bank: true,
-    btc: true
-  };
+  const DEFAULT_ENABLED = { paypal: true, venmo: true, cashapp: true, bank: true, btc: true };
 
   const DEFAULT_DATA = {
     founderName: 'Dylan Wolfe',
@@ -1615,12 +1605,9 @@
     enabledMethods: { ...DEFAULT_ENABLED }
   };
 
-  // ============================================================
-  // CLOUD DATA SYNC (replaces localStorage)
-  // ============================================================
   async function loadDataFromCloud() {
     try {
-      const response = await fetch(CLOUD_CONFIG.GET_URL, {
+      const response = await fetch(`${CLOUD_CONFIG.BASE_URL}/${CLOUD_CONFIG.BIN_ID}/latest`, {
         method: 'GET',
         headers: {
           'X-Master-Key': CLOUD_CONFIG.MASTER_KEY,
@@ -1628,13 +1615,18 @@
         }
       });
 
+      if (response.status === 404) {
+        console.log('Bin not found, creating it...');
+        await createBin();
+        return JSON.parse(JSON.stringify(DEFAULT_DATA));
+      }
+
       if (!response.ok) {
-        console.warn('Cloud fetch failed, using defaults:', response.status);
+        console.warn('Cloud fetch failed:', response.status);
         return JSON.parse(JSON.stringify(DEFAULT_DATA));
       }
 
       const remoteData = await response.json();
-      // JSONBin v3 wraps data in { record: ... } when meta=false it returns record directly
       const parsed = remoteData.record || remoteData;
 
       return {
@@ -1649,34 +1641,51 @@
     }
   }
 
-  async function saveDataToCloud(data) {
+  async function createBin() {
     try {
-      const response = await fetch(CLOUD_CONFIG.PUT_URL, {
-        method: 'PUT',
+      const response = await fetch(CLOUD_CONFIG.BASE_URL, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Master-Key': CLOUD_CONFIG.MASTER_KEY
         },
-        body: JSON.stringify(data)
+        body: JSON.stringify(DEFAULT_DATA)
       });
 
       if (!response.ok) {
-        throw new Error('Cloud save failed: ' + response.status);
+        console.error('Failed to create bin:', response.status);
+        return false;
       }
 
+      const result = await response.json();
+      console.log('Bin created with ID:', result.metadata?.id);
       return true;
     } catch (e) {
-      console.error('Cloud save error:', e);
-      throw e;
+      console.error('Create bin error:', e);
+      return false;
     }
+  }
+
+  async function saveDataToCloud(data) {
+    const response = await fetch(`${CLOUD_CONFIG.BASE_URL}/${CLOUD_CONFIG.BIN_ID}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Master-Key': CLOUD_CONFIG.MASTER_KEY
+      },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      throw new Error('Cloud save failed: ' + response.status);
+    }
+
+    return true;
   }
 
   let appData = JSON.parse(JSON.stringify(DEFAULT_DATA));
   let cloudReady = false;
 
-  // ============================================================
-  // UI HELPERS
-  // ============================================================
   function showToast(msg, type) {
     const toast = document.getElementById('toast');
     toast.textContent = msg;
@@ -1695,9 +1704,6 @@
     document.getElementById('bootLoader').classList.add('hidden');
   }
 
-  // ============================================================
-  // ROUTING
-  // ============================================================
   function handleRoute() {
     const hash = window.location.hash || '#/';
     if (hash === '#/admin') {
@@ -1718,9 +1724,6 @@
 
   window.addEventListener('hashchange', handleRoute);
 
-  // ============================================================
-  // PUBLIC RENDER
-  // ============================================================
   function renderPublicSite() {
     document.getElementById('heroFounderName').textContent = appData.founderName;
     document.getElementById('heroMission').textContent = appData.mission;
@@ -1752,9 +1755,6 @@
     document.getElementById('chapter3Text').textContent = appData.chapter3Text;
   }
 
-  // ============================================================
-  // DONATION FLOW
-  // ============================================================
   let selectedAmount = 0;
   let selectedMethod = null;
 
@@ -1854,8 +1854,6 @@
     closeModal(paymentModal);
     selectedMethod = methodId;
 
-    // Analytics tracking removed per migration guidelines (flat JSON race condition risk)
-
     loadingModal.classList.remove('active');
     void loadingModal.offsetWidth;
     loadingModal.classList.add('active');
@@ -1921,7 +1919,6 @@
 
   doneBtn.addEventListener('click', () => {
     if (!selectedMethod) return;
-    // Analytics tracking removed per migration guidelines
     closeModal(slipModal);
     thankyouModal.classList.add('active');
     selectedAmount = 0;
@@ -1931,9 +1928,6 @@
     updateDonationSummary();
   });
 
-  // ============================================================
-  // ADMIN
-  // ============================================================
   function showAdminLogin() {
     document.getElementById('adminLoginView').style.display = 'flex';
     document.getElementById('adminDashboard').style.display = 'none';
@@ -2046,31 +2040,33 @@
     }, 1800);
   }
 
-  // --- Save Settings (Hero) ---
-  document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('saveSettingsBtn');
-    btn.textContent = '⏳ Saving...';
-    btn.disabled = true;
-    try {
-      appData.founderName = document.getElementById('adminFounderName').value.trim() || DEFAULT_DATA.founderName;
-      appData.mission = document.getElementById('adminMission').value.trim() || DEFAULT_DATA.mission;
-      await saveDataToCloud(appData);
-      flashSaved(btn);
-      showToast('Settings saved to cloud ✓', 'success');
-    } catch (e) {
-      btn.textContent = origText;
-      showToast('Save failed. Check connection.', 'error');
-    }
-    btn.disabled = false;
-  });
-
-  // --- Save About Section ---
-  document.getElementById('saveAboutBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('saveAboutBtn');
+  async function handleSave(btnId, updateFn) {
+    const btn = document.getElementById(btnId);
     const origText = btn.textContent;
     btn.textContent = '⏳ Saving...';
     btn.disabled = true;
     try {
+      updateFn();
+      await saveDataToCloud(appData);
+      flashSaved(btn);
+      showToast('Saved to cloud ✓', 'success');
+    } catch (e) {
+      console.error('Save error:', e);
+      btn.textContent = origText;
+      showToast('Save failed: ' + e.message, 'error');
+    }
+    btn.disabled = false;
+  }
+
+  document.getElementById('saveSettingsBtn').addEventListener('click', () => {
+    handleSave('saveSettingsBtn', () => {
+      appData.founderName = document.getElementById('adminFounderName').value.trim() || DEFAULT_DATA.founderName;
+      appData.mission = document.getElementById('adminMission').value.trim() || DEFAULT_DATA.mission;
+    });
+  });
+
+  document.getElementById('saveAboutBtn').addEventListener('click', () => {
+    handleSave('saveAboutBtn', () => {
       appData.aboutTitle = document.getElementById('adminAboutTitle').value.trim() || DEFAULT_DATA.aboutTitle;
       appData.aboutSubtitle = document.getElementById('adminAboutSubtitle').value.trim() || DEFAULT_DATA.aboutSubtitle;
       appData.aboutQuote = document.getElementById('adminAboutQuote').value.trim() || DEFAULT_DATA.aboutQuote;
@@ -2083,23 +2079,11 @@
       if (appData.aboutParagraphs.length === 0) {
         appData.aboutParagraphs = DEFAULT_DATA.aboutParagraphs;
       }
-      await saveDataToCloud(appData);
-      flashSaved(btn);
-      showToast('About section saved to cloud ✓', 'success');
-    } catch (e) {
-      btn.textContent = origText;
-      showToast('Save failed. Check connection.', 'error');
-    }
-    btn.disabled = false;
+    });
   });
 
-  // --- Save About Dylan Section ---
-  document.getElementById('saveDylanBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('saveDylanBtn');
-    const origText = btn.textContent;
-    btn.textContent = '⏳ Saving...';
-    btn.disabled = true;
-    try {
+  document.getElementById('saveDylanBtn').addEventListener('click', () => {
+    handleSave('saveDylanBtn', () => {
       appData.dylanTitle = document.getElementById('adminDylanTitle').value.trim() || DEFAULT_DATA.dylanTitle;
       appData.dylanSubtitle = document.getElementById('adminDylanSubtitle').value.trim() || DEFAULT_DATA.dylanSubtitle;
       appData.chapter1Label = document.getElementById('adminChapter1Label').value.trim() || DEFAULT_DATA.chapter1Label;
@@ -2111,61 +2095,29 @@
       appData.chapter3Label = document.getElementById('adminChapter3Label').value.trim() || DEFAULT_DATA.chapter3Label;
       appData.chapter3Title = document.getElementById('adminChapter3Title').value.trim() || DEFAULT_DATA.chapter3Title;
       appData.chapter3Text = document.getElementById('adminChapter3Text').value.trim() || DEFAULT_DATA.chapter3Text;
-      await saveDataToCloud(appData);
-      flashSaved(btn);
-      showToast('About Dylan saved to cloud ✓', 'success');
-    } catch (e) {
-      btn.textContent = origText;
-      showToast('Save failed. Check connection.', 'error');
-    }
-    btn.disabled = false;
+    });
   });
 
-  // --- Save Payment Accounts ---
-  document.getElementById('saveAccountsBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('saveAccountsBtn');
-    const origText = btn.textContent;
-    btn.textContent = ' Saving...';
-    btn.disabled = true;
-    try {
+  document.getElementById('saveAccountsBtn').addEventListener('click', () => {
+    handleSave('saveAccountsBtn', () => {
       appData.accounts.paypal  = document.getElementById('adminPaypal').value.trim()  || DEFAULT_DATA.accounts.paypal;
       appData.accounts.venmo   = document.getElementById('adminVenmo').value.trim()   || DEFAULT_DATA.accounts.venmo;
       appData.accounts.cashapp = document.getElementById('adminCashapp').value.trim() || DEFAULT_DATA.accounts.cashapp;
       appData.accounts.bank    = document.getElementById('adminBank').value.trim()    || DEFAULT_DATA.accounts.bank;
       appData.accounts.btc     = document.getElementById('adminBtc').value.trim()     || DEFAULT_DATA.accounts.btc;
-      await saveDataToCloud(appData);
-      flashSaved(btn);
-      showToast('Payment accounts saved to cloud ✓', 'success');
-    } catch (e) {
-      btn.textContent = origText;
-      showToast('Save failed. Check connection.', 'error');
-    }
-    btn.disabled = false;
+    });
   });
 
-  // --- Save Payment Methods (enable/disable) ---
-  document.getElementById('saveMethodsBtn').addEventListener('click', async () => {
-    const btn = document.getElementById('saveMethodsBtn');
-    const origText = btn.textContent;
-    btn.textContent = '⏳ Saving...';
-    btn.disabled = true;
-    try {
+  document.getElementById('saveMethodsBtn').addEventListener('click', () => {
+    handleSave('saveMethodsBtn', () => {
       const toggles = document.querySelectorAll('#methodsToggleList .toggle-switch');
       toggles.forEach(toggle => {
         const methodId = toggle.dataset.method;
         appData.enabledMethods[methodId] = toggle.classList.contains('on');
       });
-      await saveDataToCloud(appData);
-      flashSaved(btn);
-      showToast('Payment methods saved to cloud ✓', 'success');
-    } catch (e) {
-      btn.textContent = origText;
-      showToast('Save failed. Check connection.', 'error');
-    }
-    btn.disabled = false;
+    });
   });
 
-  // --- Analytics (read-only, no cloud writes) ---
   function renderAnalytics() {
     const overview = document.getElementById('analyticsOverview');
     const details = document.getElementById('analyticsDetails');
@@ -2205,9 +2157,6 @@
     showToast('Analytics are disabled in cloud mode', 'error');
   });
 
-  // ============================================================
-  // BOOT SEQUENCE — fetch cloud data first, then render
-  // ============================================================
   async function boot() {
     try {
       appData = await loadDataFromCloud();
@@ -2215,7 +2164,7 @@
       console.log('✓ Cloud data loaded successfully');
     } catch (e) {
       console.error('Boot error:', e);
-      cloudReady = true; // still render with defaults
+      cloudReady = true;
     }
 
     hideBootLoader();
@@ -2227,5 +2176,6 @@
 
 })();
 </script>
+
 </body>
 </html>
